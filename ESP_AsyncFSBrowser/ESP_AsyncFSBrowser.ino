@@ -9,11 +9,13 @@
 #include <ESPAsyncWebServer.h>
 #include <SPIFFSEditor.h>
 #include <ArduinoJson.h>
+#include <CMMC_Blink.hpp>
 
 // SKETCH BEGIN
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 AsyncEventSource events("/events");
+CMMC_Blink *blinker;
 
 bool saveConfig(String mac);
 bool loadConfig() {
@@ -85,12 +87,8 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
     if(info->final && info->index == 0 && info->len == len){
       //the whole message is in a single frame and we got all of it's data
       Serial.printf("ws[%s][%u] %s-message[%llu]: ", server->url(), client->id(), (info->opcode == WS_TEXT)?"text":"binary", info->len);
-      uint32_t aaa;
-
       Serial.printf("[HEX]= %x \r\n", info->len);
       Serial.printf("size = %d \r\n", info->len);
-      // Serial.println(info->len);
-
       if(info->opcode == WS_TEXT){
         for(size_t i=0; i < info->len; i++) {
           msg += (char) data[i];
@@ -102,12 +100,15 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
           msg += buff ;
         }
       }
-      Serial.printf("[[[ o ]]] MESSAGE => %s\n",msg.c_str());
+
+      Serial.printf("MESSAGE => %s\n",msg.c_str());
       String header = msg.substring(0, 7);
       String value = msg.substring(7);
+      String macStr;
       bool validMessage = 0;
       if (header == "MASTER:" && value.length() == 12) {
-        String macStr = value;
+        macStr = value;
+        validMessage = true;
         saveConfig(macStr);
       }
       else {
@@ -116,7 +117,13 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
       }
 
       if(info->opcode == WS_TEXT)
-        client->text("I got your text message");
+        if (validMessage) {
+          // client->text("I got your text message");
+          client->text(macStr);
+        }
+        else {
+          client->text(String("INVALID: ") + msg);
+        }
       else
         client->binary("I got your binary message");
     } else {
@@ -156,9 +163,8 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
   }
 }
 
-
-const char* ssid = "poonnawatcafe";
-const char* password = "poonnawat16";
+const char* ssid = "Boonchukamai";
+const char* password = "0899506685";
 const char * hostName = "esp-async";
 const char* http_username = "admin";
 const char* http_password = "admin";
@@ -182,6 +188,10 @@ bool saveConfig(String mac) {
 void setup(){
   Serial.begin(115200);
   Serial.setDebugOutput(true);
+  pinMode(LED_BUILTIN, OUTPUT);
+  blinker = new CMMC_Blink;
+  blinker->init();
+  blinker->blink(100, LED_BUILTIN);
   WiFi.hostname(hostName);
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(hostName);
@@ -216,7 +226,6 @@ void setup(){
   SPIFFS.begin();
   loadConfig();
 
-
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
 
@@ -224,15 +233,11 @@ void setup(){
     client->send("hello!",NULL,millis(),1000);
   });
   server.addHandler(&events);
-
   server.addHandler(new SPIFFSEditor(http_username,http_password));
-
   server.on("/heap", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(200, "text/plain", String(ESP.getFreeHeap()));
   });
-
   server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.htm");
-
   server.onNotFound([](AsyncWebServerRequest *request){
     Serial.printf("NOT_FOUND: ");
     if(request->method() == HTTP_GET)
