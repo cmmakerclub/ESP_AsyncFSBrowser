@@ -206,9 +206,7 @@ bool saveConfig(String mac) {
 }
 
 void _wait_config_signal(uint8_t gpio, bool* longpressed) {
-    Serial.println("WAITING... CONFIG PIN");
     unsigned long _c = millis();
-    Serial.println(digitalRead(gpio));
     while(digitalRead(gpio) == LOW) {
       if((millis() - _c) >= 1000) {
         *longpressed = true;
@@ -217,16 +215,9 @@ void _wait_config_signal(uint8_t gpio, bool* longpressed) {
         while(digitalRead(gpio) == LOW) {
           yield();
         }
-        // Serial.println("Restarting...");
-        // rtcData.data[0] = CMMC_RTC_MODE_AP;
-        // WiFi.disconnect();
-        // WiFi.mode(WIFI_AP_STA);
-        // writeRTCMemory();
-        // // Try pushing frequency to 160MHz.
-        // system_update_cpu_freq(SYS_CPU_160MHZ);
-        // ESP.reset();
       }
       else {
+        *longpressed = false;
         yield();
       }
     }
@@ -331,17 +322,18 @@ void setupWebServer() {
     Serial.println("Starting webserver...");
 }
 
+bool longpressed = false;
 void setup(){
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   SPIFFS.begin();
+  WiFi.disconnect();
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(13, INPUT_PULLUP);
   digitalWrite(LED_BUILTIN, HIGH);
   blinker = new CMMC_Blink;
   blinker->init();
   Serial.println("Wating configuration pin..");
-  bool longpressed = false;
   _wait_config_signal(13, &longpressed);
   if (longpressed) {
     WiFi.hostname(hostName);
@@ -357,6 +349,7 @@ void setup(){
     setupWebServer();
   }
   else {
+    WiFi.disconnect();
     Serial.println("Initializing ESPNOW...");
     DEBUG_PRINTLN("Initializing... SLAVE");
     WiFi.mode(WIFI_AP_STA);
@@ -379,17 +372,29 @@ void setup(){
     }
     DEBUG_PRINTLN("SET ROLE SLAVE");
     esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
+    static uint8_t recv_counter = 0;
     esp_now_register_recv_cb([](uint8_t *macaddr, uint8_t *data, uint8_t len) {
-      DEBUG_PRINTLN("recv_cb");
-      DEBUG_PRINT("mac address: ");
-      printMacAddress(macaddr);
+      recv_counter++;
+      // DEBUG_PRINTLN("recv_cb");
+      // DEBUG_PRINT("mac address: ");
+      // printMacAddress(macaddr);
       DEBUG_PRINT("data: ");
       for (int i = 0; i < len; i++) {
         DEBUG_PRINT(" 0x");
         DEBUG_PRINT(data[i], HEX);
       }
+        DEBUG_PRINT(data[0], DEC);
+
       DEBUG_PRINTLN("");
       digitalWrite(LED_BUILTIN, data[0]);
+      if (data[0] == 0xff && data[1] == 0xfa) {
+        if (data[2] == 0x00 && data[3] == 0x00) {
+          Serial.printf("CLEAR COUNTER >>> %lu \r\n", recv_counter);
+          uint8_t msg[] = { recv_counter };
+          esp_now_send(master_mac, msg, 1);
+          recv_counter = 0;
+        }
+      }
     });
 
     esp_now_register_send_cb([](uint8_t* macaddr, uint8_t status) {
@@ -410,23 +415,58 @@ void setup(){
   }
   setupOTA();
   loadConfig();
-  ticker.attach_ms(500, [&]() {
-    must_send_data = 1;
-  });
+  // ticker.attach_ms(500, [&]() {
+  //   must_send_data = 1;
+  // });
 }
-uint8_t message[] = {0};
+uint8_t message[20] = {0};
 
 void loop(){
   ArduinoOTA.handle();
-  if (must_send_data) {
-    must_send_data = 0;
+
+  if (digitalRead(13) == HIGH) {
+    Serial.println("BUTTON PRESSED.");
+    digitalWrite(LED_BUILTIN, LOW);
     // DEBUG_PRINTf("[%lu] sending...\r\n", millis());
-    message[3] =  counter & 0xFF;
-    message[2] = (counter >> 8)  & 0xFF;
-    message[1] = (counter >> 16) & 0xFF;
-    message[0] = (counter >> 24) & 0xFF;
-    // digitalWrite(LED_BUILTIN, LOW);
-    // DEBUG_PRINTLN(millis());
-    esp_now_send(master_mac, message, 4);
+    // | START | MSGTYPE | CAT  | SENSOR |  UID |   DATA   | BATT  | SUM |
+    // FF FA    0x00     0x00    0x01      4       4       2      FF
+    //   2        1       1        1       4         4       2      1
+
+    // struct {
+    //   byte category;
+    //   uint32_t uuid;
+    //   uint16_t batt;
+    // } data;
+
+    message[0] = 0xff;
+    message[1] = 0xfa;
+
+    message[2] = 0x00;
+    message[3] = 0x00;
+    message[4] = 0x01;
+
+    // UUID
+    message[5] = 0x00;
+    message[6] = 0x00;
+    message[7] = 0x00;
+    message[8] = 0x00;
+
+    // message[3] =  counter & 0xFF;
+    // message[2] = (counter >> 8)  & 0xFF;
+    // message[1] = (counter >> 16) & 0xFF;
+    // message[0] = (counter >> 24) & 0xFF;
+    // DATA
+    memcpy(message+9, (const void*)&counter, 4);
+    // memcpy(message+13, (void*)counter, 4);
+
+    uint8_t master_mac2[] = {0x18,0xFE,0x34,0xEE,0xA0,0xF9};
+
+    esp_now_send(master_mac2, message, sizeof(message));
+    // for (size_t i = 0; i < 50; i++) {
+    //   Serial.printf("Sending.. [%lu]\r\n", i);
+    //   delay(100);
+    // }
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(500);
   }
 }
