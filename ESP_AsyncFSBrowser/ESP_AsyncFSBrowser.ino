@@ -1,95 +1,42 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
-#include <ArduinoOTA.h>
-#include <FS.h>
+
 #include <Ticker.h>
 #include <Hash.h>
+#include <ArduinoOTA.h>
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <SPIFFSEditor.h>
 #include <ArduinoJson.h>
 #include <CMMC_Blink.hpp>
+#include "ota.h"
+#include "doconfig.h"
+#include "helper.h"
 extern "C" {
   #include <espnow.h>
   #include <user_interface.h>
 }
+
+const char* ssid = "MARUNET";
+const char* password = "ARCGlobe!1";
+const char * hostName = "esp-async";
+const char* http_username = "admin";
+const char* http_password = "admin";
 
 // SKETCH BEGIN
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 AsyncEventSource events("/events");
 CMMC_Blink *blinker;
-uint8_t master_mac[6];
+
 uint32_t counter = 0;
 uint32_t send_ok_counter = 0;
 uint32_t send_fail_counter = 0;
 bool must_send_data = 0;
 Ticker ticker;
+extern uint8_t master_mac[6];
 
-#define DEBUG_SERIAL 1
-#if DEBUG_SERIAL
-    #define DEBUG_PRINTER Serial
-    #define DEBUG_PRINT(...) { DEBUG_PRINTER.print(__VA_ARGS__); }
-    #define DEBUG_PRINTLN(...) { DEBUG_PRINTER.println(__VA_ARGS__); }
-    #define DEBUG_PRINTF(...) { DEBUG_PRINTER.printf(__VA_ARGS__); }
-#else
-    #define DEBUG_PRINT(...) { }
-    #define DEBUG_PRINTLN(...) { }
-    #define DEBUG_PRINTF(...) { }
-#endif
-
-bool saveConfig(String mac);
-bool loadConfig() {
-  File configFile = SPIFFS.open("/config.json", "r");
-  if (!configFile) {
-    Serial.println("Failed to open config file");
-    return false;
-  }
-
-  size_t size = configFile.size();
-  if (size > 1024) {
-    Serial.println("Config file size is too large");
-    return false;
-  }
-
-  // Allocate a buffer to store contents of the file.
-  std::unique_ptr<char[]> buf(new char[size]);
-
-  // We don't use String here because ArduinoJson library requires the input
-  // buffer to be mutable. If you don't use ArduinoJson, you may as well
-  // use configFile.readString instead.
-  configFile.readBytes(buf.get(), size);
-
-  StaticJsonBuffer<200> jsonBuffer;
-  JsonObject& json = jsonBuffer.parseObject(buf.get());
-
-  if (!json.success()) {
-    Serial.println("Failed to parse config file");
-    return false;
-  }
-
-  const char* mac = json["mac"];
-  String macStr = String(mac);
-  for (size_t i = 0; i < 12; i+=2) {
-    String mac = macStr.substring(i, i+2);
-    byte b = strtoul(mac.c_str(), 0, 16);
-    master_mac[i/2] = b;
-  }
-  printMacAddress(master_mac);
-
-  return true;
-}
-
-void printMacAddress(uint8_t* macaddr) {
-  Serial.print("{");
-  for (int i = 0; i < 6; i++) {
-    Serial.print("0x");
-    Serial.print(macaddr[i], HEX);
-    if (i < 5) Serial.print(',');
-  }
-  Serial.println("};");
-}
 
 void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
   if(type == WS_EVT_CONNECT){
@@ -183,69 +130,6 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
     }
   }
 }
-
-const char* ssid = "Boonchukamai";
-const char* password = "0899506685";
-const char * hostName = "esp-async";
-const char* http_username = "admin";
-const char* http_password = "admin";
-
-bool saveConfig(String mac) {
-  StaticJsonBuffer<200> jsonBuffer;
-  JsonObject& json = jsonBuffer.createObject();
-  json["mac"] = mac;
-
-  File configFile = SPIFFS.open("/config.json", "w");
-  if (!configFile) {
-    Serial.println("Failed to open config file for writing");
-    return false;
-  }
-
-  json.printTo(configFile);
-  return true;
-}
-
-void _wait_config_signal(uint8_t gpio, bool* longpressed) {
-    unsigned long _c = millis();
-    while(digitalRead(gpio) == LOW) {
-      if((millis() - _c) >= 1000) {
-        *longpressed = true;
-        blinker->blink(500, LED_BUILTIN);
-        Serial.println("Release to take an effect.");
-        while(digitalRead(gpio) == LOW) {
-          yield();
-        }
-      }
-      else {
-        *longpressed = false;
-        yield();
-      }
-    }
-    // Serial.println("/NORMAL");
-}
-
-void setupOTA() {
-    //Send OTA events to the browser
-    ArduinoOTA.onStart([]() { events.send("Update Start", "ota"); });
-    ArduinoOTA.onEnd([]() { events.send("Update End", "ota"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-      char p[32];
-      sprintf(p, "Progress: %u%%\n", (progress/(total/100)));
-      events.send(p, "ota");
-    });
-    ArduinoOTA.onError([](ota_error_t error) {
-      if(error == OTA_AUTH_ERROR) events.send("Auth Failed", "ota");
-      else if(error == OTA_BEGIN_ERROR) events.send("Begin Failed", "ota");
-      else if(error == OTA_CONNECT_ERROR) events.send("Connect Failed", "ota");
-      else if(error == OTA_RECEIVE_ERROR) events.send("Recieve Failed", "ota");
-      else if(error == OTA_END_ERROR) events.send("End Failed", "ota");
-    });
-    ArduinoOTA.setHostname(hostName);
-    ArduinoOTA.begin();
-
-    MDNS.addService("http","tcp",80);
-}
-
 void setupWebServer() {
     ws.onEvent(onWsEvent);
     server.addHandler(&ws);
