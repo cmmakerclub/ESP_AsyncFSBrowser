@@ -1,7 +1,6 @@
 #include <FS.h>
 #include <ArduinoJson.h>
 
-uint8_t master_mac[6];
 
 extern void printMacAddress(uint8_t* macaddr);
 
@@ -20,7 +19,7 @@ bool saveConfig(String mac) {
   return true;
 }
 
-bool loadConfig() {
+bool loadConfig(uint8_t *master_mac) {
   File configFile = SPIFFS.open("/config.json", "r");
   if (!configFile) {
     Serial.println("Failed to open config file");

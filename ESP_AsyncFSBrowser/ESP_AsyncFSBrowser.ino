@@ -12,17 +12,35 @@
 #include <CMMC_Blink.hpp>
 #include "ota.h"
 #include "doconfig.h"
-#include "helper.h"
+#include "util.h"
 extern "C" {
   #include <espnow.h>
   #include <user_interface.h>
 }
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
 
-const char* ssid = "MARUNET";
-const char* password = "ARCGlobe!1";
+#define DHTPIN            12
+uint32_t delayMS;
+// Uncomment the type of sensor in use:
+//#define DHTTYPE         DHT11     // DHT 11
+#define DHTTYPE           DHT22     // DHT 22 (AM2302)
+//#define DHTTYPE           DHT21     // DHT 21 (AM2301)
+
+// See guide for details on sensor wiring and usage:
+//   https://learn.adafruit.com/dht/overview
+
+DHT_Unified dht(DHTPIN, DHTTYPE);
+
+const char* ssid = "belkin.636";
+const char* password = "3eb7e66b";
 const char * hostName = "esp-async";
 const char* http_username = "admin";
 const char* http_password = "admin";
+
+
+uint8_t master_mac[6];
 
 // SKETCH BEGIN
 AsyncWebServer server(80);
@@ -35,183 +53,46 @@ uint32_t send_ok_counter = 0;
 uint32_t send_fail_counter = 0;
 bool must_send_data = 0;
 Ticker ticker;
-extern uint8_t master_mac[6];
-
-
-void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
-  if(type == WS_EVT_CONNECT){
-    Serial.printf("ws[%s][%u] connect\n", server->url(), client->id());
-    client->printf("Hello Client %u :)", client->id());
-    client->ping();
-  } else if(type == WS_EVT_DISCONNECT){
-    Serial.printf("ws[%s][%u] disconnect: %u\n", server->url(), client->id());
-  } else if(type == WS_EVT_ERROR){
-    Serial.printf("ws[%s][%u] error(%u): %s\n", server->url(), client->id(), *((uint16_t*)arg), (char*)data);
-  } else if(type == WS_EVT_PONG){
-    Serial.printf("ws[%s][%u] pong[%u]: %s\n", server->url(), client->id(), len, (len)?(char*)data:"");
-  } else if(type == WS_EVT_DATA){
-    AwsFrameInfo * info = (AwsFrameInfo*)arg;
-    String msg = "";
-    if(info->final && info->index == 0 && info->len == len){
-      //the whole message is in a single frame and we got all of it's data
-      Serial.printf("ws[%s][%u] %s-message[%llu]: ", server->url(), client->id(), (info->opcode == WS_TEXT)?"text":"binary", info->len);
-      Serial.printf("[HEX]= %x \r\n", info->len);
-      Serial.printf("size = %d \r\n", info->len);
-      if(info->opcode == WS_TEXT){
-        for(size_t i=0; i < info->len; i++) {
-          msg += (char) data[i];
-        }
-      } else {
-        char buff[3];
-        for(size_t i=0; i < info->len; i++) {
-          sprintf(buff, "%02x ", (uint8_t) data[i]);
-          msg += buff ;
-        }
-      }
-
-      Serial.printf("MESSAGE => %s\n",msg.c_str());
-      String header = msg.substring(0, 7);
-      String value = msg.substring(7);
-      String macStr;
-      bool validMessage = 0;
-      if (header == "MASTER:" && value.length() == 12) {
-        macStr = value;
-        validMessage = true;
-        saveConfig(macStr);
-      }
-      else {
-        Serial.print("INVALID:");
-        Serial.println(msg);
-      }
-
-      if(info->opcode == WS_TEXT)
-        if (validMessage) {
-          // client->text("I got your text message");
-          client->text(macStr);
-        }
-        else {
-          client->text(String("INVALID: ") + msg);
-        }
-      else
-        client->binary("I got your binary message");
-    } else {
-      //message is comprised of multiple frames or the frame is split into multiple packets
-      if(info->index == 0){
-        if(info->num == 0)
-          Serial.printf("ws[%s][%u] %s-message start\n", server->url(), client->id(), (info->message_opcode == WS_TEXT)?"text":"binary");
-        Serial.printf("ws[%s][%u] frame[%u] start[%llu]\n", server->url(), client->id(), info->num, info->len);
-      }
-
-      Serial.printf("ws[%s][%u] frame[%u] %s[%llu - %llu]: ", server->url(), client->id(), info->num, (info->message_opcode == WS_TEXT)?"text":"binary", info->index, info->index + len);
-
-      if(info->opcode == WS_TEXT){
-        for(size_t i=0; i < info->len; i++) {
-          msg += (char) data[i];
-        }
-      } else {
-        char buff[3];
-        for(size_t i=0; i < info->len; i++) {
-          sprintf(buff, "%02x ", (uint8_t) data[i]);
-          msg += buff ;
-        }
-      }
-      Serial.printf("%s\n",msg.c_str());
-
-      if((info->index + len) == info->len){
-        Serial.printf("ws[%s][%u] frame[%u] end[%llu]\n", server->url(), client->id(), info->num, info->len);
-        if(info->final){
-          Serial.printf("ws[%s][%u] %s-message end\n", server->url(), client->id(), (info->message_opcode == WS_TEXT)?"text":"binary");
-          if(info->message_opcode == WS_TEXT)
-            client->text("I got your text message");
-          else
-            client->binary("I got your binary message");
-        }
-      }
-    }
-  }
-}
-void setupWebServer() {
-    ws.onEvent(onWsEvent);
-    server.addHandler(&ws);
-    events.onConnect([](AsyncEventSourceClient *client){
-      client->send("hello!",NULL,millis(),1000);
-    });
-    server.addHandler(&events);
-    server.addHandler(new SPIFFSEditor(http_username,http_password));
-    server.on("/heap", HTTP_GET, [](AsyncWebServerRequest *request){
-      request->send(200, "text/plain", String(ESP.getFreeHeap()));
-    });
-    server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.htm");
-    server.onNotFound([](AsyncWebServerRequest *request){
-      Serial.printf("NOT_FOUND: ");
-      if(request->method() == HTTP_GET)
-        Serial.printf("GET");
-      else if(request->method() == HTTP_POST)
-        Serial.printf("POST");
-      else if(request->method() == HTTP_DELETE)
-        Serial.printf("DELETE");
-      else if(request->method() == HTTP_PUT)
-        Serial.printf("PUT");
-      else if(request->method() == HTTP_PATCH)
-        Serial.printf("PATCH");
-      else if(request->method() == HTTP_HEAD)
-        Serial.printf("HEAD");
-      else if(request->method() == HTTP_OPTIONS)
-        Serial.printf("OPTIONS");
-      else
-        Serial.printf("UNKNOWN");
-      Serial.printf(" http://%s%s\n", request->host().c_str(), request->url().c_str());
-
-      if(request->contentLength()){
-        Serial.printf("_CONTENT_TYPE: %s\n", request->contentType().c_str());
-        Serial.printf("_CONTENT_LENGTH: %u\n", request->contentLength());
-      }
-
-      int headers = request->headers();
-      int i;
-      for(i=0;i<headers;i++){
-        AsyncWebHeader* h = request->getHeader(i);
-        Serial.printf("_HEADER[%s]: %s\n", h->name().c_str(), h->value().c_str());
-      }
-
-      int params = request->params();
-      for(i=0;i<params;i++){
-        AsyncWebParameter* p = request->getParam(i);
-        if(p->isFile()){
-          Serial.printf("_FILE[%s]: %s, size: %u\n", p->name().c_str(), p->value().c_str(), p->size());
-        } else if(p->isPost()){
-          Serial.printf("_POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
-        } else {
-          Serial.printf("_GET[%s]: %s\n", p->name().c_str(), p->value().c_str());
-        }
-      }
-
-      request->send(404);
-    });
-    server.onFileUpload([](AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final){
-      if(!index)
-        Serial.printf("UploadStart: %s\n", filename.c_str());
-      Serial.printf("%s", (const char*)data);
-      if(final)
-        Serial.printf("UploadEnd: %s (%u)\n", filename.c_str(), index+len);
-    });
-    server.onRequestBody([](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-      if(!index)
-        Serial.printf("BodyStart: %u\n", total);
-      Serial.printf("%s", (const char*)data);
-      if(index + len == total)
-        Serial.printf("BodyEnd: %u\n", total);
-    });
-    server.begin();
-    Serial.println("Starting webserver...");
-}
-
 bool longpressed = false;
+
+
+#include "webserver.h"
+
+
 void setup(){
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   SPIFFS.begin();
   WiFi.disconnect();
+  // Initialize device.
+  dht.begin();
+  Serial.println("DHTxx Unified Sensor Example");
+  // Print temperature sensor details.
+  sensor_t sensor;
+  dht.temperature().getSensor(&sensor);
+  Serial.println("------------------------------------");
+  Serial.println("Temperature");
+  Serial.print  ("Sensor:       "); Serial.println(sensor.name);
+  Serial.print  ("Driver Ver:   "); Serial.println(sensor.version);
+  Serial.print  ("Unique ID:    "); Serial.println(sensor.sensor_id);
+  Serial.print  ("Max Value:    "); Serial.print(sensor.max_value); Serial.println(" *C");
+  Serial.print  ("Min Value:    "); Serial.print(sensor.min_value); Serial.println(" *C");
+  Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println(" *C");
+  Serial.println("------------------------------------");
+  // Print humidity sensor details.
+  dht.humidity().getSensor(&sensor);
+  Serial.println("------------------------------------");
+  Serial.println("Humidity");
+  Serial.print  ("Sensor:       "); Serial.println(sensor.name);
+  Serial.print  ("Driver Ver:   "); Serial.println(sensor.version);
+  Serial.print  ("Unique ID:    "); Serial.println(sensor.sensor_id);
+  Serial.print  ("Max Value:    "); Serial.print(sensor.max_value); Serial.println("%");
+  Serial.print  ("Min Value:    "); Serial.print(sensor.min_value); Serial.println("%");
+  Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println("%");
+  Serial.println("------------------------------------");
+  // Set delay between sensor readings based on sensor details.
+  delayMS = sensor.min_delay / 1000;
+
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(13, INPUT_PULLUP);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -298,7 +179,7 @@ void setup(){
     });
   }
   setupOTA();
-  loadConfig();
+  loadConfig(master_mac);
   // ticker.attach_ms(500, [&]() {
   //   must_send_data = 1;
   // });
@@ -307,6 +188,31 @@ uint8_t message[20] = {0};
 
 void loop(){
   ArduinoOTA.handle();
+  // Delay between measurements.
+  delay(delayMS);
+  // Get temperature event and print its value.
+  sensors_event_t event;
+  dht.temperature().getEvent(&event);
+  if (isnan(event.temperature)) {
+    Serial.println("Error reading temperature!");
+  }
+  else {
+    Serial.print("Temperature: ");
+    Serial.print(event.temperature);
+    Serial.println(" *C");
+  }
+  uint32_t temperature_uint32 = (uint32_t)(event.temperature*100);
+  // Get humidity event and print its value.
+  dht.humidity().getEvent(&event);
+  if (isnan(event.relative_humidity)) {
+    Serial.println("Error reading humidity!");
+  }
+  else {
+    Serial.print("Humidity: ");
+    Serial.print(event.relative_humidity);
+    Serial.println("%");
+  }
+  uint32_t humidity_uint32 = (uint32_t)(event.relative_humidity*100);
 
   if (digitalRead(13) == HIGH) {
     Serial.println("BUTTON PRESSED.");
@@ -325,31 +231,31 @@ void loop(){
     message[0] = 0xff;
     message[1] = 0xfa;
 
-    message[2] = 0x00;
-    message[3] = 0x00;
+    message[2] = 0x01;
+    message[3] = 0x01;
     message[4] = 0x01;
 
     // UUID
-    message[5] = 0x00;
-    message[6] = 0x00;
-    message[7] = 0x00;
-    message[8] = 0x00;
+    message[5]  = 0x01;
+    message[6]  = 0x02;
+    message[7]  = 0x03;
+    message[8]  = 0x04;
+    message[9]  = 0x05;
+    message[10] = 0x06;
 
-    // message[3] =  counter & 0xFF;
-    // message[2] = (counter >> 8)  & 0xFF;
-    // message[1] = (counter >> 16) & 0xFF;
-    // message[0] = (counter >> 24) & 0xFF;
-    // DATA
-    memcpy(message+9, (const void*)&counter, 4);
-    // memcpy(message+13, (void*)counter, 4);
+    memcpy(message+11, (const void*)&temperature_uint32, 4);
+    memcpy(message+15, (const void*)&humidity_uint32, 4);
 
-    uint8_t master_mac2[] = {0x18,0xFE,0x34,0xEE,0xA0,0xF9};
+    message[19] = 0xFF;
 
-    esp_now_send(master_mac2, message, sizeof(message));
-    // for (size_t i = 0; i < 50; i++) {
-    //   Serial.printf("Sending.. [%lu]\r\n", i);
-    //   delay(100);
-    // }
+    Serial.println(temperature_uint32, HEX);
+    Serial.println(humidity_uint32, HEX);
+
+    Serial.println(temperature_uint32);
+    Serial.println(humidity_uint32);
+
+    // uint8_t master_mac2[] = {0x18,0xFE,0x34,0xEE,0xA0,0xF9};
+    esp_now_send(master_mac, message, sizeof(message));
     digitalWrite(LED_BUILTIN, HIGH);
     delay(500);
   }
