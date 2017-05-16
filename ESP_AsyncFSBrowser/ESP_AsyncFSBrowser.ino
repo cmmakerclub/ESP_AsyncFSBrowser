@@ -54,14 +54,13 @@ uint32_t send_fail_counter = 0;
 bool must_send_data = 0;
 Ticker ticker;
 bool longpressed = false;
-
-
 #include "webserver.h"
 
 
 void setup(){
   Serial.begin(115200);
   Serial.setDebugOutput(true);
+  initBattery();
   SPIFFS.begin();
   WiFi.disconnect();
   // Initialize device.
@@ -217,17 +216,6 @@ void loop(){
   if (digitalRead(13) == HIGH) {
     Serial.println("BUTTON PRESSED.");
     digitalWrite(LED_BUILTIN, LOW);
-    // DEBUG_PRINTf("[%lu] sending...\r\n", millis());
-    // | START | MSGTYPE | CAT  | SENSOR |  UID |   DATA   | BATT  | SUM |
-    // FF FA    0x00     0x00    0x01      4       4       2      FF
-    //   2        1       1        1       4         4       2      1
-
-    // struct {
-    //   byte category;
-    //   uint32_t uuid;
-    //   uint16_t batt;
-    // } data;
-
     message[0] = 0xff;
     message[1] = 0xfa;
 
