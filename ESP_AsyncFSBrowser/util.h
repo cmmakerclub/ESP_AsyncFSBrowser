@@ -131,7 +131,7 @@ int getBatteryVoltage()
   static int filters[MaxValues] = {0};
   static int lastIndex = 0;
 
-  int val = analogRead(A0);
+  int val = ESP.getVcc();
 
   filters[lastIndex++ % MaxValues] = val;
   val = median(filters, MaxValues);

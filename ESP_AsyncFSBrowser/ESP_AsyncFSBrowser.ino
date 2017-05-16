@@ -21,6 +21,9 @@ extern "C" {
 #include <DHT.h>
 #include <DHT_U.h>
 
+ADC_MODE(ADC_VCC);
+
+
 #define DHTPIN            12
 uint32_t delayMS;
 // Uncomment the type of sensor in use:
@@ -151,14 +154,14 @@ void setup(){
 
       DEBUG_PRINTLN("");
       digitalWrite(LED_BUILTIN, data[0]);
-      if (data[0] == 0xff && data[1] == 0xfa) {
-        if (data[2] == 0x00 && data[3] == 0x00) {
-          Serial.printf("CLEAR COUNTER >>> %lu \r\n", recv_counter);
-          uint8_t msg[] = { recv_counter };
-          esp_now_send(master_mac, msg, 1);
-          recv_counter = 0;
-        }
-      }
+      // if (data[0] == 0xff && data[1] == 0xfa) {
+      //   if (data[2] == 0x00 && data[3] == 0x00) {
+      //     Serial.printf("CLEAR COUNTER >>> %lu \r\n", recv_counter);
+      //     uint8_t msg[] = { recv_counter };
+      //     esp_now_send(master_mac, msg, 1);
+      //     recv_counter = 0;
+      //   }
+      // }
     });
 
     esp_now_register_send_cb([](uint8_t* macaddr, uint8_t status) {
@@ -183,7 +186,7 @@ void setup(){
   //   must_send_data = 1;
   // });
 }
-uint8_t message[20] = {0};
+uint8_t message[24] = {0};
 
 void loop(){
   ArduinoOTA.handle();
@@ -224,27 +227,31 @@ void loop(){
     message[4] = 0x01;
 
     // UUID
-    message[5]  = 0x01;
-    message[6]  = 0x02;
-    message[7]  = 0x03;
-    message[8]  = 0x04;
-    message[9]  = 0x05;
-    message[10] = 0x06;
+    message[5]  = 'a';
+    message[6]  = 'b';
+    message[7]  = 'c';
+    message[8]  = '0';
+    message[9]  = '0';
+    message[10] = '1';
+    int battery = getBatteryVoltage();
 
     memcpy(message+11, (const void*)&temperature_uint32, 4);
     memcpy(message+15, (const void*)&humidity_uint32, 4);
+    memcpy(message+19, (const void*)&battery, 4);
 
-    message[19] = 0xFF;
+    byte sum = 0;
+    for (size_t i = 0; i < sizeof(message)-1; i++) {
+      sum ^= message[i];
+    }
+    message[23] = sum;
 
-    Serial.println(temperature_uint32, HEX);
-    Serial.println(humidity_uint32, HEX);
-
-    Serial.println(temperature_uint32);
-    Serial.println(humidity_uint32);
+    Serial.printf("temp: %02x - %lu\r\n", temperature_uint32, temperature_uint32);
+    Serial.printf("humid: %02x - %lu \r\n", humidity_uint32, humidity_uint32);
+    Serial.printf("batt: %02x - %lu \r\n", battery, battery);
 
     // uint8_t master_mac2[] = {0x18,0xFE,0x34,0xEE,0xA0,0xF9};
     esp_now_send(master_mac, message, sizeof(message));
     digitalWrite(LED_BUILTIN, HIGH);
-    delay(500);
+    delay(50);
   }
 }
