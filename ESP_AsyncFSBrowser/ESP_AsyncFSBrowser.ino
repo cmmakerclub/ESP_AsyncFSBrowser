@@ -90,10 +90,11 @@ void setup(){
   Serial.print  ("Unique ID:    "); Serial.println(sensor.sensor_id);
   Serial.print  ("Max Value:    "); Serial.print(sensor.max_value); Serial.println("%");
   Serial.print  ("Min Value:    "); Serial.print(sensor.min_value); Serial.println("%");
-  Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println("%");
-  Serial.println("------------------------------------");
   // Set delay between sensor readings based on sensor details.
   delayMS = sensor.min_delay / 1000;
+  Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println("%");
+  Serial.print  ("minDelay:   "); Serial.print(sensor.min_delay); Serial.println("ms");
+  Serial.println("------------------------------------");
 
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(13, INPUT_PULLUP);
@@ -186,9 +187,12 @@ void setup(){
   //   must_send_data = 1;
   // });
 }
-uint8_t message[24] = {0};
+
+#define MESSAGE_SIZE 28
+uint8_t message[MESSAGE_SIZE] = {0};
 
 void loop(){
+  bzero(message, sizeof(message));
   ArduinoOTA.handle();
   // Delay between measurements.
   delay(delayMS);
@@ -237,13 +241,14 @@ void loop(){
 
     memcpy(message+11, (const void*)&temperature_uint32, 4);
     memcpy(message+15, (const void*)&humidity_uint32, 4);
-    memcpy(message+19, (const void*)&battery, 4);
+    // memcpy(message+19, {0}, 4);
+    memcpy(message+23, (const void*)&battery, 4);
 
     byte sum = 0;
     for (size_t i = 0; i < sizeof(message)-1; i++) {
       sum ^= message[i];
     }
-    message[23] = sum;
+    message[MESSAGE_SIZE-1] = sum;
 
     Serial.printf("temp: %02x - %lu\r\n", temperature_uint32, temperature_uint32);
     Serial.printf("humid: %02x - %lu \r\n", humidity_uint32, humidity_uint32);
