@@ -10,8 +10,8 @@
 #include <ArduinoJson.h>
 #include <CMMC_Blink.hpp>
 
-  #define DEBUG_SERIAL 1
-#if DEBUG_SERIAL
+  #define CMMC_DEBUG_SERIAL 1
+#if CMMC_DEBUG_SERIAL
     #define CMMC_DEBUG_PRINTER Serial
     #define CMMC_DEBUG_PRINT(...) { CMMC_DEBUG_PRINTER.print(__VA_ARGS__); }
     #define CMMC_DEBUG_PRINTLN(...) { CMMC_DEBUG_PRINTER.println(__VA_ARGS__); }
@@ -47,8 +47,8 @@ uint32_t delayMS;
 
 DHT_Unified dht(DHTPIN, DHTTYPE);
 
-const char* ssid = "belkin.636";
-const char* password = "3eb7e66b";
+const char* ssid = "CMMC-PORTABLE-001";
+const char* password = "espertap";
 const char * hostName = "esp-async";
 const char* http_username = "admin";
 const char* http_password = "admin";
@@ -78,6 +78,7 @@ void setup(){
   initBattery();
   SPIFFS.begin();
   WiFi.disconnect();
+  delay(100);
   // Initialize device.
   dht.begin();
   {
@@ -176,8 +177,8 @@ void setup(){
         CMMC_DEBUG_PRINT(" 0x");
         CMMC_DEBUG_PRINT(data[i], HEX);
       }
-        CMMC_DEBUG_PRINT(data[0], DEC);
-
+      
+      CMMC_DEBUG_PRINT(data[0], DEC);
       CMMC_DEBUG_PRINTLN("");
       digitalWrite(LED_BUILTIN, data[0]);
     });
