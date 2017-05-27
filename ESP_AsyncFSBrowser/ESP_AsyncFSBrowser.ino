@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
-
 #include <Ticker.h>
 #include <Hash.h>
 #include <ArduinoOTA.h>
@@ -10,6 +9,19 @@
 #include <SPIFFSEditor.h>
 #include <ArduinoJson.h>
 #include <CMMC_Blink.hpp>
+
+  #define DEBUG_SERIAL 1
+#if DEBUG_SERIAL
+    #define CMMC_DEBUG_PRINTER Serial
+    #define CMMC_DEBUG_PRINT(...) { CMMC_DEBUG_PRINTER.print(__VA_ARGS__); }
+    #define CMMC_DEBUG_PRINTLN(...) { CMMC_DEBUG_PRINTER.println(__VA_ARGS__); }
+    #define CMMC_DEBUG_PRINTF(...) { CMMC_DEBUG_PRINTER.printf(__VA_ARGS__); }
+#else
+    #define CMMC_DEBUG_PRINT(...) { }
+    #define CMMC_DEBUG_PRINTLN(...) { }
+    #define CMMC_DEBUG_PRINTF(...) { }
+#endif
+
 #include "ota.h"
 #include "doconfig.h"
 #include "util.h"
@@ -22,7 +34,6 @@ extern "C" {
 #include <DHT_U.h>
 
 ADC_MODE(ADC_VCC);
-
 
 #define DHTPIN            12
 uint32_t delayMS;
@@ -44,6 +55,7 @@ const char* http_password = "admin";
 
 
 uint8_t master_mac[6];
+uint8_t slave_mac[6];
 
 // SKETCH BEGIN
 AsyncWebServer server(80);
@@ -68,42 +80,48 @@ void setup(){
   WiFi.disconnect();
   // Initialize device.
   dht.begin();
-  Serial.println("DHTxx Unified Sensor Example");
-  // Print temperature sensor details.
-  sensor_t sensor;
-  dht.temperature().getSensor(&sensor);
-  Serial.println("------------------------------------");
-  Serial.println("Temperature");
-  Serial.print  ("Sensor:       "); Serial.println(sensor.name);
-  Serial.print  ("Driver Ver:   "); Serial.println(sensor.version);
-  Serial.print  ("Unique ID:    "); Serial.println(sensor.sensor_id);
-  Serial.print  ("Max Value:    "); Serial.print(sensor.max_value); Serial.println(" *C");
-  Serial.print  ("Min Value:    "); Serial.print(sensor.min_value); Serial.println(" *C");
-  Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println(" *C");
-  Serial.println("------------------------------------");
-  // Print humidity sensor details.
-  dht.humidity().getSensor(&sensor);
-  Serial.println("------------------------------------");
-  Serial.println("Humidity");
-  Serial.print  ("Sensor:       "); Serial.println(sensor.name);
-  Serial.print  ("Driver Ver:   "); Serial.println(sensor.version);
-  Serial.print  ("Unique ID:    "); Serial.println(sensor.sensor_id);
-  Serial.print  ("Max Value:    "); Serial.print(sensor.max_value); Serial.println("%");
-  Serial.print  ("Min Value:    "); Serial.print(sensor.min_value); Serial.println("%");
-  // Set delay between sensor readings based on sensor details.
-  delayMS = sensor.min_delay / 1000;
-  Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println("%");
-  Serial.print  ("minDelay:   "); Serial.print(sensor.min_delay); Serial.println("ms");
-  Serial.println("------------------------------------");
+  {
+    // Print temperature sensor details.
+    sensor_t sensor;
+    dht.temperature().getSensor(&sensor);
+    Serial.println("------------------------------------");
+    Serial.println("Temperature");
+    Serial.print  ("Sensor:       "); Serial.println(sensor.name);
+    Serial.print  ("Driver Ver:   "); Serial.println(sensor.version);
+    Serial.print  ("Unique ID:    "); Serial.println(sensor.sensor_id);
+    Serial.print  ("Max Value:    "); Serial.print(sensor.max_value); Serial.println(" *C");
+    Serial.print  ("Min Value:    "); Serial.print(sensor.min_value); Serial.println(" *C");
+    Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println(" *C");
+    Serial.println("------------------------------------");
+    // Print humidity sensor details.
+    dht.humidity().getSensor(&sensor);
+    Serial.println("------------------------------------");
+    Serial.println("Humidity");
+    Serial.print  ("Sensor:       "); Serial.println(sensor.name);
+    Serial.print  ("Driver Ver:   "); Serial.println(sensor.version);
+    Serial.print  ("Unique ID:    "); Serial.println(sensor.sensor_id);
+    Serial.print  ("Max Value:    "); Serial.print(sensor.max_value); Serial.println("%");
+    Serial.print  ("Min Value:    "); Serial.print(sensor.min_value); Serial.println("%");
+    // Set delay between sensor readings based on sensor details.
+    delayMS = sensor.min_delay / 1000;
+    Serial.print  ("Resolution:   "); Serial.print(sensor.resolution); Serial.println("%");
+    Serial.print  ("minDelay:   "); Serial.print(sensor.min_delay); Serial.println("ms");
+    Serial.println("------------------------------------");
+  }
 
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(13, INPUT_PULLUP);
   digitalWrite(LED_BUILTIN, HIGH);
   blinker = new CMMC_Blink;
   blinker->init();
+
   Serial.println("Wating configuration pin..");
   _wait_config_signal(13, &longpressed);
+  Serial.println("...Done");
   if (longpressed) {
+    Serial.println("====================");
+    Serial.println("    MODE = CONFIG   ");
+    Serial.println("====================");
     WiFi.hostname(hostName);
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(hostName);
@@ -117,67 +135,66 @@ void setup(){
     setupWebServer();
   }
   else {
+    Serial.println("====================");
+    Serial.println("    MODE = ESPNOW   ");
+    Serial.println("====================");
     WiFi.disconnect();
     Serial.println("Initializing ESPNOW...");
-    DEBUG_PRINTLN("Initializing... SLAVE");
+    CMMC_DEBUG_PRINTLN("Initializing... SLAVE");
     WiFi.mode(WIFI_AP_STA);
 
     uint8_t macaddr[6];
     wifi_get_macaddr(STATION_IF, macaddr);
-    DEBUG_PRINT("[master] mac address (STATION_IF): ");
+    CMMC_DEBUG_PRINT("[master] mac address (STATION_IF): ");
     printMacAddress(macaddr);
 
     wifi_get_macaddr(SOFTAP_IF, macaddr);
-    DEBUG_PRINT("[slave] mac address (SOFTAP_IF): ");
+    CMMC_DEBUG_PRINTLN("[slave] mac address (SOFTAP_IF): ");
+    CMMC_DEBUG_PRINTLN("[slave] mac address (SOFTAP_IF): ");
+    CMMC_DEBUG_PRINTLN("[slave] mac address (SOFTAP_IF): ");
+    CMMC_DEBUG_PRINTLN("[slave] mac address (SOFTAP_IF): ");
     printMacAddress(macaddr);
+    memcpy(slave_mac, macaddr, 6);
 
     if (esp_now_init() == 0) {
-      DEBUG_PRINTLN("init");
+      CMMC_DEBUG_PRINTLN("init");
     } else {
-      DEBUG_PRINTLN("init failed");
+      CMMC_DEBUG_PRINTLN("init failed");
       ESP.restart();
       return;
     }
-    DEBUG_PRINTLN("SET ROLE SLAVE");
+    CMMC_DEBUG_PRINTLN("SET ROLE SLAVE");
     esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
     static uint8_t recv_counter = 0;
     esp_now_register_recv_cb([](uint8_t *macaddr, uint8_t *data, uint8_t len) {
       recv_counter++;
-      // DEBUG_PRINTLN("recv_cb");
-      // DEBUG_PRINT("mac address: ");
+      // CMMC_DEBUG_PRINTLN("recv_cb");
+      // CMMC_DEBUG_PRINT("mac address: ");
       // printMacAddress(macaddr);
-      DEBUG_PRINT("data: ");
+      CMMC_DEBUG_PRINT("data: ");
       for (int i = 0; i < len; i++) {
-        DEBUG_PRINT(" 0x");
-        DEBUG_PRINT(data[i], HEX);
+        CMMC_DEBUG_PRINT(" 0x");
+        CMMC_DEBUG_PRINT(data[i], HEX);
       }
-        DEBUG_PRINT(data[0], DEC);
+        CMMC_DEBUG_PRINT(data[0], DEC);
 
-      DEBUG_PRINTLN("");
+      CMMC_DEBUG_PRINTLN("");
       digitalWrite(LED_BUILTIN, data[0]);
-      // if (data[0] == 0xff && data[1] == 0xfa) {
-      //   if (data[2] == 0x00 && data[3] == 0x00) {
-      //     Serial.printf("CLEAR COUNTER >>> %lu \r\n", recv_counter);
-      //     uint8_t msg[] = { recv_counter };
-      //     esp_now_send(master_mac, msg, 1);
-      //     recv_counter = 0;
-      //   }
-      // }
     });
 
     esp_now_register_send_cb([](uint8_t* macaddr, uint8_t status) {
-      DEBUG_PRINT(millis());
-      DEBUG_PRINT("send to mac addr: ");
+      CMMC_DEBUG_PRINT(millis());
+      CMMC_DEBUG_PRINT("send to mac addr: ");
       printMacAddress(macaddr);
       if (status == 0) {
         send_ok_counter++;
         counter++;
-        DEBUG_PRINTF("... send_cb OK. [%lu/%lu]\r\n", send_ok_counter, send_ok_counter + send_fail_counter);
+        CMMC_DEBUG_PRINTF("... send_cb OK. [%lu/%lu]\r\n", send_ok_counter, send_ok_counter + send_fail_counter);
         digitalWrite(LED_BUILTIN, HIGH);
       }
       else {
         send_fail_counter++;
-        DEBUG_PRINTF("... send_cb FAILED. [%lu/%lu]\r\n", send_ok_counter, send_ok_counter + send_fail_counter);
+        CMMC_DEBUG_PRINTF("... send_cb FAILED. [%lu/%lu]\r\n", send_ok_counter, send_ok_counter + send_fail_counter);
       }
     });
   }
@@ -188,7 +205,7 @@ void setup(){
   // });
 }
 
-#define MESSAGE_SIZE 28
+#define MESSAGE_SIZE 30
 uint8_t message[MESSAGE_SIZE] = {0};
 
 void loop(){
@@ -237,13 +254,13 @@ void loop(){
     message[8]  = '0';
     message[9]  = '0';
     message[10] = '1';
+
     int battery = getBatteryVoltage();
 
     memcpy(message+11, (const void*)&temperature_uint32, 4);
     memcpy(message+15, (const void*)&humidity_uint32, 4);
     // memcpy(message+19, {0}, 4);
     memcpy(message+23, (const void*)&battery, 4);
-
     byte sum = 0;
     for (size_t i = 0; i < sizeof(message)-1; i++) {
       sum ^= message[i];
